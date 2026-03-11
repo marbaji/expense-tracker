@@ -68,13 +68,16 @@ def add_expense():
     # Get amount
     while True:
         try:
-            amount = FloatPrompt.ask("\n[yellow]Amount[/yellow] ($)")
+            amount_str = Prompt.ask("\n[yellow]Amount[/yellow] ($)")
+            # Remove dollar sign and any whitespace
+            amount_str = amount_str.strip().replace('$', '').replace(',', '')
+            amount = float(amount_str)
             if amount <= 0:
                 console.print("[red]❌ Amount must be positive![/red]")
                 continue
             break
-        except:
-            console.print("[red]❌ Please enter a valid number[/red]")
+        except ValueError:
+            console.print("[red]❌ Please enter a valid number (with or without $)[/red]")
 
     # Get category
     category = Prompt.ask("[green]Category[/green] (e.g., Food, Transport)")
