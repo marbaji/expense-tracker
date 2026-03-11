@@ -19,6 +19,10 @@ EXPENSE_FILE = "expenses.json"
 BUDGET_FILE = "budgets.json"
 console = Console()
 
+# Budget thresholds
+BUDGET_WARNING_THRESHOLD = 80  # Yellow warning at 80%
+BUDGET_OVER_THRESHOLD = 100    # Red alert at 100%
+
 # Color mapping for categories
 CATEGORY_COLORS = {
     "food": "bright_yellow",
@@ -39,6 +43,21 @@ def get_category_color(category):
     return CATEGORY_COLORS.get(category.lower(), "white")
 
 
+def parse_amount(prompt_text):
+    """Parse amount with flexible input ($, commas, spaces)"""
+    while True:
+        try:
+            amount_str = Prompt.ask(prompt_text)
+            amount_str = amount_str.strip().replace('$', '').replace(',', '')
+            amount = float(amount_str)
+            if amount <= 0:
+                console.print("[red]❌ Amount must be positive![/red]")
+                continue
+            return amount
+        except ValueError:
+            console.print("[red]❌ Please enter a valid number[/red]")
+
+
 def load_expenses():
     """Load expenses from JSON file"""
     try:
@@ -49,10 +68,17 @@ def load_expenses():
 
 
 def load_budgets():
-    """Load budgets from JSON file"""
+    """Load budgets from JSON file with validation"""
     try:
         with open(BUDGET_FILE, 'r') as f:
-            return json.load(f)
+            budgets = json.load(f)
+            # Validate and normalize: only keep valid positive numbers
+            # Normalize keys to lowercase for case-insensitive matching
+            validated = {}
+            for category, amount in budgets.items():
+                if isinstance(amount, (int, float)) and amount > 0:
+                    validated[category.lower()] = amount
+            return validated
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
@@ -81,22 +107,11 @@ def add_expense():
     console.print("\n[bold cyan]💸 Add New Expense[/bold cyan]")
     console.print("[dim]" + "─" * 50 + "[/dim]")
 
-    # Get amount
-    while True:
-        try:
-            amount_str = Prompt.ask("\n[yellow]Amount[/yellow] ($)")
-            # Remove dollar sign and any whitespace
-            amount_str = amount_str.strip().replace('$', '').replace(',', '')
-            amount = float(amount_str)
-            if amount <= 0:
-                console.print("[red]❌ Amount must be positive![/red]")
-                continue
-            break
-        except ValueError:
-            console.print("[red]❌ Please enter a valid number (with or without $)[/red]")
+    # Get amount using helper function
+    amount = parse_amount("\n[yellow]Amount[/yellow] ($)")
 
     # Get category
-    category = Prompt.ask("[green]Category[/green] (e.g., Food, Transport)")
+    category = Prompt.ask("[green]Category[/green] (e.g., Food, Transport)").strip()
     if not category:
         category = "Other"
 
@@ -173,29 +188,45 @@ def set_budget():
     if budgets:
         console.print("\n[dim]Current budgets:[/dim]")
         for cat, amt in budgets.items():
-            console.print(f"  [cyan]{cat}[/cyan]: ${amt:.2f}/month")
+            console.print(f"  [cyan]{cat.capitalize()}[/cyan]: ${amt:.2f}/month")
 
-    # Get category
-    category = Prompt.ask("\n[green]Category[/green]")
+    # Get category with validation
+    category = Prompt.ask("\n[green]Category[/green]").strip()
     if not category:
-        console.print("[red]Category required![/red]")
+        console.print("[red]❌ Category required![/red]")
         return
 
-    # Get budget amount
-    while True:
-        try:
-            amount_str = Prompt.ask(f"[yellow]Monthly budget for {category}[/yellow] ($)")
-            amount_str = amount_str.strip().replace('$', '').replace(',', '')
-            amount = float(amount_str)
-            if amount <= 0:
-                console.print("[red]❌ Budget must be positive![/red]")
-                continue
-            break
-        except ValueError:
-            console.print("[red]❌ Please enter a valid number[/red]")
+    # Normalize category to lowercase for consistent matching
+    category_key = category.lower()
 
-    # Save budget
-    budgets[category] = amount
+    # Get budget amount (allow 0 or empty to delete)
+    amount_str = Prompt.ask(
+        f"[yellow]Monthly budget for {category}[/yellow] ($, 0 to delete)"
+    ).strip()
+
+    # Handle deletion
+    if amount_str == '0' or not amount_str:
+        if category_key in budgets:
+            del budgets[category_key]
+            save_budgets(budgets)
+            console.print(f"\n[bold yellow]✓ Budget removed for {category}[/bold yellow]")
+        else:
+            console.print(f"\n[yellow]No budget set for {category}[/yellow]")
+        return
+
+    # Parse and validate amount
+    try:
+        amount_str = amount_str.replace('$', '').replace(',', '')
+        amount = float(amount_str)
+        if amount <= 0:
+            console.print("[red]❌ Budget must be positive! Use 0 to delete.[/red]")
+            return
+    except ValueError:
+        console.print("[red]❌ Please enter a valid number[/red]")
+        return
+
+    # Save budget with normalized key
+    budgets[category_key] = amount
     save_budgets(budgets)
 
     console.print(f"\n[bold green]✓ Budget set: {category} = ${amount:.2f}/month[/bold green]")
@@ -212,11 +243,21 @@ def show_summary():
     total = sum(expense['amount'] for expense in expenses)
     budgets = load_budgets()
 
-    # By category
+    # By category - normalize to handle case variations
     by_category = {}
+    category_name_map = {}  # Maps lowercase to first occurrence's original name
+
     for expense in expenses:
-        category = expense['category']
-        by_category[category] = by_category.get(category, 0) + expense['amount']
+        category_key = expense['category'].lower()
+
+        if category_key not in category_name_map:
+            # First time seeing this category (case-insensitive)
+            category_name_map[category_key] = expense['category']
+            by_category[expense['category']] = expense['amount']
+        else:
+            # Add to existing category
+            original_name = category_name_map[category_key]
+            by_category[original_name] += expense['amount']
 
     # Create summary panel
     summary_text = f"[bold yellow]💰 Total:[/bold yellow] [bold green]${total:.2f}[/bold green]\n"
@@ -241,13 +282,15 @@ def show_summary():
     for category in sorted(by_category.keys()):
         amount = by_category[category]
         color = get_category_color(category)
-        budget = budgets.get(category)
+        # Use lowercase for budget lookup to handle case-insensitive matching
+        budget = budgets.get(category.lower())
 
         if budget:
             percentage = (amount / budget) * 100
-            if percentage >= 100:
+            # Use threshold constants
+            if percentage >= BUDGET_OVER_THRESHOLD:
                 status = f"[red]⚠️  {percentage:.0f}% (OVER!)[/red]"
-            elif percentage >= 80:
+            elif percentage >= BUDGET_WARNING_THRESHOLD:
                 status = f"[yellow]⚠️  {percentage:.0f}%[/yellow]"
             else:
                 status = f"[green]✓ {percentage:.0f}%[/green]"
@@ -406,6 +449,7 @@ def show_help():
 [bold cyan]SET BUDGET:[/bold cyan]
   [yellow]python3 tracker.py budget[/yellow]
   Set monthly budget limits for categories
+  Enter 0 to delete a budget
 
 [bold cyan]SEARCH EXPENSES:[/bold cyan]
   [yellow]python3 tracker.py search <keyword>[/yellow]
