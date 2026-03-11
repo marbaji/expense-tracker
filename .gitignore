@@ -7,8 +7,9 @@ __pycache__/
 # macOS
 .DS_Store
 
-# User data (don't commit personal expenses)
+# User data (don't commit personal expenses and budgets)
 expenses.json
+budgets.json
 
 # Exported files
 expenses_*.csv

@@ -16,6 +16,7 @@ from rich import box
 from rich.text import Text
 
 EXPENSE_FILE = "expenses.json"
+BUDGET_FILE = "budgets.json"
 console = Console()
 
 # Color mapping for categories
@@ -45,6 +46,21 @@ def load_expenses():
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return []
+
+
+def load_budgets():
+    """Load budgets from JSON file"""
+    try:
+        with open(BUDGET_FILE, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_budgets(budgets):
+    """Save budgets to JSON file"""
+    with open(BUDGET_FILE, 'w') as f:
+        json.dump(budgets, f, indent=2)
 
 
 def save_expenses(expenses):
@@ -146,6 +162,45 @@ def view_expenses():
     console.print(f"\n[dim]Total expenses: {len(expenses)}[/dim]")
 
 
+def set_budget():
+    """Set monthly budget for a category"""
+    console.print("\n[bold cyan]💰 Set Category Budget[/bold cyan]")
+    console.print("[dim]" + "─" * 50 + "[/dim]")
+
+    budgets = load_budgets()
+
+    # Show existing budgets
+    if budgets:
+        console.print("\n[dim]Current budgets:[/dim]")
+        for cat, amt in budgets.items():
+            console.print(f"  [cyan]{cat}[/cyan]: ${amt:.2f}/month")
+
+    # Get category
+    category = Prompt.ask("\n[green]Category[/green]")
+    if not category:
+        console.print("[red]Category required![/red]")
+        return
+
+    # Get budget amount
+    while True:
+        try:
+            amount_str = Prompt.ask(f"[yellow]Monthly budget for {category}[/yellow] ($)")
+            amount_str = amount_str.strip().replace('$', '').replace(',', '')
+            amount = float(amount_str)
+            if amount <= 0:
+                console.print("[red]❌ Budget must be positive![/red]")
+                continue
+            break
+        except ValueError:
+            console.print("[red]❌ Please enter a valid number[/red]")
+
+    # Save budget
+    budgets[category] = amount
+    save_budgets(budgets)
+
+    console.print(f"\n[bold green]✓ Budget set: {category} = ${amount:.2f}/month[/bold green]")
+
+
 def show_summary():
     """Show spending summary with rich formatting"""
     expenses = load_expenses()
@@ -155,6 +210,7 @@ def show_summary():
         return
 
     total = sum(expense['amount'] for expense in expenses)
+    budgets = load_budgets()
 
     # By category
     by_category = {}
@@ -178,19 +234,38 @@ def show_summary():
     )
 
     table.add_column("Category", justify="left")
-    table.add_column("Amount", justify="right")
-    table.add_column("Percentage", justify="right")
+    table.add_column("Spent", justify="right")
+    table.add_column("Budget", justify="right")
+    table.add_column("Status", justify="right")
 
     for category in sorted(by_category.keys()):
         amount = by_category[category]
-        percentage = (amount / total) * 100
         color = get_category_color(category)
+        budget = budgets.get(category)
 
-        table.add_row(
-            f"[bold {color}]{category}[/bold {color}]",
-            f"[{color}]${amount:.2f}[/{color}]",
-            f"[{color}]{percentage:.1f}%[/{color}]"
-        )
+        if budget:
+            percentage = (amount / budget) * 100
+            if percentage >= 100:
+                status = f"[red]⚠️  {percentage:.0f}% (OVER!)[/red]"
+            elif percentage >= 80:
+                status = f"[yellow]⚠️  {percentage:.0f}%[/yellow]"
+            else:
+                status = f"[green]✓ {percentage:.0f}%[/green]"
+
+            table.add_row(
+                f"[bold {color}]{category}[/bold {color}]",
+                f"[{color}]${amount:.2f}[/{color}]",
+                f"[dim]${budget:.2f}[/dim]",
+                status
+            )
+        else:
+            percentage = (amount / total) * 100
+            table.add_row(
+                f"[bold {color}]{category}[/bold {color}]",
+                f"[{color}]${amount:.2f}[/{color}]",
+                f"[dim]No budget[/dim]",
+                f"[dim]{percentage:.1f}% of total[/dim]"
+            )
 
     console.print("\n")
     console.print(table)
@@ -326,6 +401,11 @@ def show_help():
 
 [bold cyan]SHOW SUMMARY:[/bold cyan]
   [yellow]python3 tracker.py summary[/yellow]
+  Shows spending vs budgets with warnings!
+
+[bold cyan]SET BUDGET:[/bold cyan]
+  [yellow]python3 tracker.py budget[/yellow]
+  Set monthly budget limits for categories
 
 [bold cyan]SEARCH EXPENSES:[/bold cyan]
   [yellow]python3 tracker.py search <keyword>[/yellow]
@@ -364,6 +444,8 @@ def main():
             view_expenses()
         elif command == 'summary':
             show_summary()
+        elif command == 'budget':
+            set_budget()
         elif command == 'search' and len(sys.argv) > 2:
             keyword = ' '.join(sys.argv[2:])  # Join all words after 'search'
             search_expenses(keyword)
